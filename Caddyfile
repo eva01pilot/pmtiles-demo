@@ -1,0 +1,25 @@
+:80
+
+root * /srv
+file_server
+handle /api/* {
+  reverse_proxy api:8000
+}
+
+handle_path /tiles/* {
+  reverse_proxy minio:9000 {
+    header_up Range {http.request.header.Range}
+    header_up If-Range {http.request.header.If-Range}
+    header_up If-Modified-Since {http.request.header.If-Modified-Since}
+    header_up If-None-Match {http.request.header.If-None-Match}
+  }
+
+  header {
+    Access-Control-Allow-Origin *
+    Access-Control-Allow-Headers *
+    Access-Control-Expose-Headers ETag, Accept-Ranges, Content-Range, Content-Length
+  }
+
+  rewrite * /pmtiles-demo/{path}
+}
+

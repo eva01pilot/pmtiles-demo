@@ -1,0 +1,184 @@
+
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>PMTiles Demo</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <style>
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    #top { padding: 12px 14px; border-bottom: 1px solid #ddd; display:flex; gap:12px; align-items:center; }
+    #map { height: calc(100vh - 56px); }
+    select, input, button { padding: 8px; }
+    #meta { font-size: 12px; color:#333; }
+  </style>
+</head>
+<body>
+  <div id="top">
+    <strong>PMTiles demo</strong>
+
+    <select id="bundleSelect"></select>
+
+    <form id="uploadForm" style="display:flex; gap:8px; align-items:center;">
+      <input id="name" placeholder="name" required />
+      <input id="desc" placeholder="description" />
+      <input id="file" type="file" required />
+      <button type="submit">Upload</button>
+    </form>
+
+    <div id="meta"></div>
+  </div>
+
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/pmtiles@3.2.1/dist/pmtiles.js"></script>
+
+  <script>
+    const protocol = new pmtiles.Protocol();
+    maplibregl.addProtocol("pmtiles", protocol.tile);
+
+const map = new maplibregl.Map({
+  container: "map",
+  style: {
+    version: 8,
+    sources: {
+      osm: {
+        type: "raster",
+        tiles: [
+          "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
+          "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
+          "https://c.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        ],
+        tileSize: 256,
+        attribution:
+          "© OpenStreetMap contributors"
+      }
+    },
+    layers: [
+      {
+        id: "osm",
+        type: "raster",
+        source: "osm"
+      }
+    ]
+  },
+  center: [0, 0],
+  zoom: 1
+});
+
+    async function refreshBundles(selectedId = null) {
+      const res = await fetch("/api/bundles");
+      const data = await res.json();
+      const items = data.items || [];
+
+      const sel = document.getElementById("bundleSelect");
+      sel.innerHTML = "";
+      for (const b of items) {
+        const opt = document.createElement("option");
+        opt.value = b.id;
+        opt.textContent = b.name;
+        sel.appendChild(opt);
+      }
+
+      if (items.length === 0) {
+        document.getElementById("meta").textContent = "No bundles yet. Upload a GeoJSON, MBTiles, PMTiles, or zipped shapefile.";
+        return;
+      }
+
+      const pick = selectedId || items[0].id;
+      sel.value = pick;
+      const chosen = items.find(x => x.id === pick) || items[0];
+      await loadBundle(chosen);
+    }
+
+    function setMeta(b) {
+      const meta = document.getElementById("meta");
+      const bounds = b.bounds ? JSON.stringify(b.bounds) : "unknown";
+      meta.textContent = `${b.description || ""}  bounds: ${bounds}`;
+    }
+
+    async function loadBundle(b) {
+      setMeta(b);
+
+      const sourceId = "bundle";
+      if (map.getLayer("bundle-fill")) map.removeLayer("bundle-fill");
+      if (map.getLayer("bundle-line")) map.removeLayer("bundle-line");
+      if (map.getLayer("bundle-point")) map.removeLayer("bundle-point");
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
+
+      const url = `pmtiles://${location.origin}${b.pmtiles_url}`;
+
+      map.addSource(sourceId, {
+        type: "vector",
+        url
+      });
+
+      const layerName = b.name.trim().replace(/\s+/g, "-").replace(/[^a-zA-Z0-9._-]+/g, "").slice(0,120) || "bundle";
+
+      map.addLayer({
+        id: "bundle-fill",
+        type: "fill",
+        source: sourceId,
+        "source-layer": layerName,
+        paint: { "fill-opacity": 0.25 }
+      });
+
+      map.addLayer({
+        id: "bundle-line",
+        type: "line",
+        source: sourceId,
+        "source-layer": layerName,
+        paint: { "line-width": 2 }
+      });
+
+      map.addLayer({
+        id: "bundle-point",
+        type: "circle",
+        source: sourceId,
+        "source-layer": layerName,
+        paint: { "circle-radius": 4, "circle-opacity": 0.85 }
+      });
+
+      if (b.bounds && b.bounds.length === 4) {
+        const [minX, minY, maxX, maxY] = b.bounds;
+        map.fitBounds([[minX, minY], [maxX, maxY]], { padding: 30, duration: 500 });
+      }
+    }
+
+    document.getElementById("bundleSelect").addEventListener("change", async (e) => {
+      const id = e.target.value;
+      const res = await fetch("/api/bundles");
+      const data = await res.json();
+      const b = (data.items || []).find(x => x.id === id);
+      if (b) await loadBundle(b);
+    });
+
+    document.getElementById("uploadForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const name = document.getElementById("name").value;
+      const desc = document.getElementById("desc").value;
+      const file = document.getElementById("file").files[0];
+      if (!file) return;
+
+      const fd = new FormData();
+      fd.append("name", name);
+      fd.append("description", desc);
+      fd.append("file", file);
+
+      const resp = await fetch("/api/bundles", { method: "POST", body: fd });
+      if (!resp.ok) {
+        const txt = await resp.text();
+        alert("Upload failed:\n" + txt);
+        return;
+      }
+      const created = await resp.json();
+      await refreshBundles(created.id);
+      e.target.reset();
+    });
+
+    refreshBundles();
+  </script>
+</body>
+</html>
